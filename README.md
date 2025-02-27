@@ -60,19 +60,6 @@ Even if organization details are defined, force interactive prompting:
 .\ADO-Inventory.ps1 -Interactive
 ```
 
-### Pre-defined Organization
-
-Run with pre-defined organization without prompting:
-
-```powershell
-.\ADO-Inventory.ps1 -Organizations @(
-    @{
-        Name = "your-org-name"
-        Token = "your-pat-token" 
-    }
-)
-```
-
 ### Export Options
 
 Export to CSV:
@@ -85,23 +72,6 @@ Export to Excel (requires ImportExcel module):
 
 ```powershell
 .\ADO-Inventory.ps1 -ExportFormat Excel -ExportPath "C:\Reports\ADO-Inventory"
-```
-
-### Multiple Organizations
-
-Run with multiple pre-defined organizations:
-
-```powershell
-.\ADO-Inventory.ps1 -Organizations @(
-    @{
-        Name = "organization1"
-        Token = "token1" 
-    },
-    @{
-        Name = "organization2"
-        Token = "token2" 
-    }
-) -ExportFormat Excel
 ```
 
 ## Output
@@ -234,4 +204,4 @@ Please submit issues and pull requests through the project repository.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the Apache License - see the LICENSE file for details.
