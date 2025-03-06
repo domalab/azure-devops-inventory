@@ -16,7 +16,7 @@ param (
     [string]$ApiVersion = "6.0",
     
     [Parameter(Mandatory = $false)]
-    [ValidateSet("None", "CSV", "Excel")]
+    [ValidateSet("None", "CSV", "Excel", "Markdown")]
     [string]$ExportFormat = "None",
     
     [Parameter(Mandatory = $false)]
@@ -90,8 +90,33 @@ function Get-AzDoProjects {
     $uri = "https://dev.azure.com/$Organization/_apis/projects?api-version=$ApiVersion"
     
     try {
-        $result = Invoke-AzDoApi -Uri $uri -Token $Token
-        return $result.value
+        Write-Host "Attempting to retrieve projects from $uri" -ForegroundColor Cyan
+        $response = Invoke-RestMethod -Uri $uri -Headers (Get-AzDoAuthHeader -Token $Token) -Method GET -ContentType "application/json"
+        
+        # Check if response has the expected structure
+        if ($null -ne $response -and $response.PSObject.Properties.Name -contains "value" -and $null -ne $response.value) {
+            Write-Host "Found $($response.count) projects in organization $Organization" -ForegroundColor Green
+            return $response.value
+        }
+        elseif ($null -ne $response -and $response.GetType().IsArray) {
+            # Handle direct array response
+            Write-Host "Found $($response.Count) projects returned as array in organization $Organization" -ForegroundColor Green
+            return $response
+        }
+        else {
+            # Try alternate approach to get projects
+            Write-Host "Using alternate method to retrieve projects" -ForegroundColor Yellow
+            $altUri = "https://dev.azure.com/$Organization/_apis/projects?api-version=7.0"
+            $altResponse = Invoke-RestMethod -Uri $altUri -Headers (Get-AzDoAuthHeader -Token $Token) -Method GET -ContentType "application/json"
+            
+            if ($null -ne $altResponse -and $altResponse.PSObject.Properties.Name -contains "value" -and $null -ne $altResponse.value) {
+                Write-Host "Found $($altResponse.count) projects using alternate method" -ForegroundColor Green
+                return $altResponse.value
+            }
+        }
+        
+        Write-Warning "Could not retrieve projects from response structure"
+        return @()
     }
     catch {
         Write-Warning "Failed to retrieve projects from $Organization. Error: $_"
@@ -248,6 +273,343 @@ function Get-AzDoAgents {
     }
     
     return $agents
+}
+
+function Get-AzDoServiceEndpoints {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Organization,
+        
+        [Parameter(Mandatory = $true)]
+        [string[]]$Projects,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Token,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$ApiVersion = "6.0-preview.4"
+    )
+    
+    $allEndpoints = @()
+    
+    foreach ($project in $Projects) {
+        try {
+            $uri = "https://dev.azure.com/$Organization/$project/_apis/serviceendpoint/endpoints?api-version=$ApiVersion"
+            $result = Invoke-AzDoApi -Uri $uri -Token $Token
+            
+            if ($result -and $result.value) {
+                $projectEndpoints = $result.value | ForEach-Object {
+                    [PSCustomObject]@{
+                        Project = $project
+                        Name = $_.name
+                        Id = $_.id
+                        Type = $_.type
+                        Url = $_.url
+                        CreatedBy = $_.createdBy.displayName
+                        Description = $_.description
+                        IsReady = $_.isReady
+                        IsShared = $_.isShared
+                    }
+                }
+                $allEndpoints += $projectEndpoints
+            }
+        }
+        catch {
+            Write-Warning "Failed to retrieve service endpoints for project $project. Error: $_"
+        }
+    }
+    
+    return $allEndpoints
+}
+
+function Get-AzDoReleasePipelines {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Organization,
+        
+        [Parameter(Mandatory = $true)]
+        [string[]]$Projects,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Token,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$ApiVersion = "6.0"
+    )
+    
+    $allReleasePipelines = @()
+    
+    foreach ($project in $Projects) {
+        try {
+            $uri = "https://vsrm.dev.azure.com/$Organization/$project/_apis/release/definitions?api-version=$ApiVersion"
+            $result = Invoke-AzDoApi -Uri $uri -Token $Token
+            
+            if ($result -and $result.value) {
+                $projectReleasePipelines = $result.value | ForEach-Object {
+                    [PSCustomObject]@{
+                        Project = $project
+                        Name = $_.name
+                        Id = $_.id
+                        ReleaseNameFormat = $_.releaseNameFormat
+                        Path = $_.path
+                        CreatedBy = $_.createdBy.displayName
+                        ModifiedBy = $_.modifiedBy.displayName
+                        CreatedOn = $_.createdOn
+                        ModifiedOn = $_.modifiedOn
+                        IsDisabled = $_.isDisabled
+                        Url = $_.url
+                    }
+                }
+                $allReleasePipelines += $projectReleasePipelines
+            }
+        }
+        catch {
+            Write-Warning "Failed to retrieve release pipelines for project $project. Error: $_"
+        }
+    }
+    
+    return $allReleasePipelines
+}
+
+function Get-AzDoVariableGroups {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Organization,
+        
+        [Parameter(Mandatory = $true)]
+        [string[]]$Projects,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Token,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$ApiVersion = "6.0-preview.2"
+    )
+    
+    $allVariableGroups = @()
+    
+    foreach ($project in $Projects) {
+        try {
+            $uri = "https://dev.azure.com/$Organization/$project/_apis/distributedtask/variablegroups?api-version=$ApiVersion"
+            $result = Invoke-AzDoApi -Uri $uri -Token $Token
+            
+            if ($result -and $result.value) {
+                $projectVariableGroups = $result.value | ForEach-Object {
+                    [PSCustomObject]@{
+                        Project = $project
+                        Name = $_.name
+                        Id = $_.id
+                        Description = $_.description
+                        Type = $_.type
+                        VariableCount = ($_.variables.PSObject.Properties | Measure-Object).Count
+                        CreatedBy = $_.createdBy.displayName
+                        CreatedOn = $_.createdOn
+                        ModifiedBy = $_.modifiedBy.displayName
+                        ModifiedOn = $_.modifiedOn
+                    }
+                }
+                $allVariableGroups += $projectVariableGroups
+            }
+        }
+        catch {
+            Write-Warning "Failed to retrieve variable groups for project $project. Error: $_"
+        }
+    }
+    
+    return $allVariableGroups
+}
+
+function Get-AzDoTeams {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Organization,
+        
+        [Parameter(Mandatory = $true)]
+        [string[]]$Projects,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Token,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$ApiVersion = "6.0"
+    )
+    
+    $allTeams = @()
+    
+    foreach ($project in $Projects) {
+        try {
+            $uri = "https://dev.azure.com/$Organization/_apis/projects/$project/teams?api-version=$ApiVersion"
+            $result = Invoke-AzDoApi -Uri $uri -Token $Token
+            
+            if ($result -and $result.value) {
+                $projectTeams = $result.value | ForEach-Object {
+                    # Get team members
+                    $teamMembers = @()
+                    try {
+                        $memberUri = "https://dev.azure.com/$Organization/_apis/projects/$project/teams/$($_.id)/members?api-version=$ApiVersion"
+                        $memberResult = Invoke-AzDoApi -Uri $memberUri -Token $Token
+                        
+                        if ($memberResult -and $memberResult.value) {
+                            $teamMembers = $memberResult.value.Count
+                        }
+                    }
+                    catch {
+                        Write-Warning "Failed to retrieve team members for team $($_.name) in project $project. Error: $_"
+                    }
+                    
+                    [PSCustomObject]@{
+                        Project = $project
+                        Name = $_.name
+                        Id = $_.id
+                        Description = $_.description
+                        MemberCount = $teamMembers
+                        Url = $_.url
+                        IsDefault = $_.isDefaultTeam
+                        Identity = $_.identity
+                    }
+                }
+                $allTeams += $projectTeams
+            }
+        }
+        catch {
+            Write-Warning "Failed to retrieve teams for project $project. Error: $_"
+        }
+    }
+    
+    return $allTeams
+}
+
+function Get-AzDoExtensions {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Organization,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Token,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$ApiVersion = "6.0-preview.1"
+    )
+    
+    $allExtensions = @()
+    
+    try {
+        $uri = "https://extmgmt.dev.azure.com/$Organization/_apis/extensionmanagement/installedextensions?api-version=$ApiVersion"
+        $result = Invoke-AzDoApi -Uri $uri -Token $Token
+        
+        if ($result -and $result.value) {
+            $extensions = $result.value | ForEach-Object {
+                [PSCustomObject]@{
+                    Name = $_.extensionId
+                    PublisherId = $_.publisherId
+                    PublisherName = $_.publisherName
+                    Version = $_.version
+                    LastPublished = $_.lastPublished
+                    InstallState = $_.installState.installState
+                    ExtensionName = $_.extensionName
+                }
+            }
+            $allExtensions += $extensions
+        }
+    }
+    catch {
+        Write-Warning "Failed to retrieve extensions for organization $Organization. Error: $_"
+    }
+    
+    return $allExtensions
+}
+
+function Get-AzDoPullRequests {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Organization,
+        
+        [Parameter(Mandatory = $true)]
+        [string[]]$Projects,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$Token,
+        
+        [Parameter(Mandatory = $false)]
+        [int]$Top = 100,
+        
+        [Parameter(Mandatory = $false)]
+        [string]$ApiVersion = "6.0"
+    )
+    
+    $allPullRequests = @()
+    
+    foreach ($project in $Projects) {
+        try {
+            # First get repositories to query PRs by repo
+            $repoUri = "https://dev.azure.com/$Organization/$project/_apis/git/repositories?api-version=$ApiVersion"
+            $repoResult = Invoke-AzDoApi -Uri $repoUri -Token $Token
+            
+            if ($repoResult -and $repoResult.value) {
+                foreach ($repo in $repoResult.value) {
+                    # Get active PRs
+                    $prUri = "https://dev.azure.com/$Organization/$project/_apis/git/repositories/$($repo.id)/pullrequests?searchCriteria.status=active&`$top=$Top&api-version=$ApiVersion"
+                    $prResult = Invoke-AzDoApi -Uri $prUri -Token $Token
+                    
+                    if ($prResult -and $prResult.value) {
+                        $pullRequests = $prResult.value | ForEach-Object {
+                            [PSCustomObject]@{
+                                Project = $project
+                                Repository = $repo.name
+                                Id = $_.pullRequestId
+                                Title = $_.title
+                                Status = $_.status
+                                CreatedBy = $_.createdBy.displayName
+                                CreationDate = $_.creationDate
+                                SourceBranch = $_.sourceRefName -replace "refs/heads/", ""
+                                TargetBranch = $_.targetRefName -replace "refs/heads/", ""
+                                IsDraft = $_.isDraft
+                                ReviewersCount = ($_.reviewers | Measure-Object).Count
+                                Url = $_.url
+                            }
+                        }
+                        $allPullRequests += $pullRequests
+                    }
+                    
+                    # Get completed PRs
+                    $completedPrUri = "https://dev.azure.com/$Organization/$project/_apis/git/repositories/$($repo.id)/pullrequests?searchCriteria.status=completed&`$top=$Top&api-version=$ApiVersion"
+                    $completedPrResult = Invoke-AzDoApi -Uri $completedPrUri -Token $Token
+                    
+                    if ($completedPrResult -and $completedPrResult.value) {
+                        $completedPullRequests = $completedPrResult.value | ForEach-Object {
+                            [PSCustomObject]@{
+                                Project = $project
+                                Repository = $repo.name
+                                Id = $_.pullRequestId
+                                Title = $_.title
+                                Status = $_.status
+                                CreatedBy = $_.createdBy.displayName
+                                CreationDate = $_.creationDate
+                                ClosedDate = $_.closedDate
+                                SourceBranch = $_.sourceRefName -replace "refs/heads/", ""
+                                TargetBranch = $_.targetRefName -replace "refs/heads/", ""
+                                IsDraft = $_.isDraft
+                                ReviewersCount = ($_.reviewers | Measure-Object).Count
+                                Url = $_.url
+                            }
+                        }
+                        $allPullRequests += $completedPullRequests
+                    }
+                }
+            }
+        }
+        catch {
+            Write-Warning "Failed to retrieve pull requests for project $project. Error: $_"
+        }
+    }
+    
+    return $allPullRequests
 }
 
 function Get-AzDoPipelines {
@@ -748,6 +1110,42 @@ function Export-AzDoInventoryToCSV {
         $InventoryData.ArtifactFeeds | Export-Csv -Path "$ExportPath-ArtifactFeeds.csv" -NoTypeInformation
         Write-Host "Artifact Feeds exported to $ExportPath-ArtifactFeeds.csv" -ForegroundColor Green
     }
+    
+    # Export service endpoints
+    if ($InventoryData.ServiceEndpoints.Count -gt 0) {
+        $InventoryData.ServiceEndpoints | Export-Csv -Path "$ExportPath-ServiceEndpoints.csv" -NoTypeInformation
+        Write-Host "Service Endpoints exported to $ExportPath-ServiceEndpoints.csv" -ForegroundColor Green
+    }
+    
+    # Export release pipelines
+    if ($InventoryData.ReleasePipelines.Count -gt 0) {
+        $InventoryData.ReleasePipelines | Export-Csv -Path "$ExportPath-ReleasePipelines.csv" -NoTypeInformation
+        Write-Host "Release Pipelines exported to $ExportPath-ReleasePipelines.csv" -ForegroundColor Green
+    }
+    
+    # Export variable groups
+    if ($InventoryData.VariableGroups.Count -gt 0) {
+        $InventoryData.VariableGroups | Export-Csv -Path "$ExportPath-VariableGroups.csv" -NoTypeInformation
+        Write-Host "Variable Groups exported to $ExportPath-VariableGroups.csv" -ForegroundColor Green
+    }
+    
+    # Export teams
+    if ($InventoryData.Teams.Count -gt 0) {
+        $InventoryData.Teams | Export-Csv -Path "$ExportPath-Teams.csv" -NoTypeInformation
+        Write-Host "Teams exported to $ExportPath-Teams.csv" -ForegroundColor Green
+    }
+    
+    # Export extensions
+    if ($InventoryData.Extensions.Count -gt 0) {
+        $InventoryData.Extensions | Export-Csv -Path "$ExportPath-Extensions.csv" -NoTypeInformation
+        Write-Host "Extensions exported to $ExportPath-Extensions.csv" -ForegroundColor Green
+    }
+    
+    # Export pull requests
+    if ($InventoryData.PullRequests.Count -gt 0) {
+        $InventoryData.PullRequests | Export-Csv -Path "$ExportPath-PullRequests.csv" -NoTypeInformation
+        Write-Host "Pull Requests exported to $ExportPath-PullRequests.csv" -ForegroundColor Green
+    }
 }
 
 function Export-AzDoInventoryToExcel {
@@ -826,7 +1224,264 @@ function Export-AzDoInventoryToExcel {
         $InventoryData.ArtifactFeeds | Export-Excel -Path $excelPath -WorksheetName "ArtifactFeeds" -AutoSize -TableName "ArtifactFeeds"
     }
     
+    # Export service endpoints
+    if ($InventoryData.ServiceEndpoints.Count -gt 0) {
+        $InventoryData.ServiceEndpoints | Export-Excel -Path $excelPath -WorksheetName "ServiceEndpoints" -AutoSize -TableName "ServiceEndpoints"
+    }
+    
+    # Export release pipelines
+    if ($InventoryData.ReleasePipelines.Count -gt 0) {
+        $InventoryData.ReleasePipelines | Export-Excel -Path $excelPath -WorksheetName "ReleasePipelines" -AutoSize -TableName "ReleasePipelines"
+    }
+    
+    # Export variable groups
+    if ($InventoryData.VariableGroups.Count -gt 0) {
+        $InventoryData.VariableGroups | Export-Excel -Path $excelPath -WorksheetName "VariableGroups" -AutoSize -TableName "VariableGroups"
+    }
+    
+    # Export teams
+    if ($InventoryData.Teams.Count -gt 0) {
+        $InventoryData.Teams | Export-Excel -Path $excelPath -WorksheetName "Teams" -AutoSize -TableName "Teams"
+    }
+    
+    # Export extensions
+    if ($InventoryData.Extensions.Count -gt 0) {
+        $InventoryData.Extensions | Export-Excel -Path $excelPath -WorksheetName "Extensions" -AutoSize -TableName "Extensions"
+    }
+    
+    # Export pull requests
+    if ($InventoryData.PullRequests.Count -gt 0) {
+        $InventoryData.PullRequests | Export-Excel -Path $excelPath -WorksheetName "PullRequests" -AutoSize -TableName "PullRequests"
+    }
+    
     Write-Host "Inventory exported to $excelPath" -ForegroundColor Green
+}
+
+function Export-AzDoInventoryToMarkdown {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject]$InventoryData,
+        
+        [Parameter(Mandatory = $true)]
+        [string]$ExportPath
+    )
+    
+    # Create directory if it doesn't exist
+    $directory = Split-Path -Path $ExportPath -Parent
+    if (-not (Test-Path -Path $directory)) {
+        New-Item -Path $directory -ItemType Directory -Force | Out-Null
+    }
+    
+    $mdPath = "$ExportPath.md"
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $orgName = $InventoryData.Organization
+    
+    # Start building the markdown content
+    $mdContent = @"
+# Azure DevOps Inventory Report
+
+**Organization:** $orgName  
+**Generated:** $timestamp
+
+## Summary
+
+| Resource Type | Count |
+|---------------|-------|
+| Projects | $($InventoryData.Projects.Count) |
+| Repositories | $($InventoryData.Repositories.Count) |
+| Pipelines | $($InventoryData.Pipelines.Count) |
+| Release Pipelines | $($InventoryData.ReleasePipelines.Count) |
+| Agent Pools & Agents | $($InventoryData.Agents.Count) |
+| Service Endpoints | $($InventoryData.ServiceEndpoints.Count) |
+| Wikis | $($InventoryData.Wikis.Count) |
+| Boards | $($InventoryData.Boards.Count) |
+| Work Items (Recent 100) | $($InventoryData.WorkItems.Count) |
+| Test Plans | $($InventoryData.TestPlans.Count) |
+| Dashboards | $($InventoryData.Dashboards.Count) |
+| Variable Groups | $($InventoryData.VariableGroups.Count) |
+| Artifact Feeds | $($InventoryData.ArtifactFeeds.Count) |
+| Teams | $($InventoryData.Teams.Count) |
+| Extensions | $($InventoryData.Extensions.Count) |
+| Pull Requests | $($InventoryData.PullRequests.Count) |
+
+"@
+
+    # Projects
+    if ($InventoryData.Projects.Count -gt 0) {
+        $mdContent += @"
+
+## Projects
+
+| Name | State | Visibility | Description |
+|------|-------|------------|-------------|
+"@
+        foreach ($project in $InventoryData.Projects) {
+            $description = if ($project.Description) { $project.Description.Replace("|", "\|").Replace("`n", " ") } else { "" }
+            $mdContent += "`n| $($project.Name) | $($project.State) | $($project.Visibility) | $description |"
+        }
+    }
+
+    # Repositories
+    if ($InventoryData.Repositories.Count -gt 0) {
+        $mdContent += @"
+
+## Repositories
+
+| Project | Name | URL |
+|---------|------|-----|
+"@
+        foreach ($repo in $InventoryData.Repositories) {
+            $mdContent += "`n| $($repo.Project) | $($repo.Name) | $($repo.Url) |"
+        }
+    }
+
+    # Pipelines
+    if ($InventoryData.Pipelines.Count -gt 0) {
+        $mdContent += @"
+
+## Pipelines
+
+| Project | Name | ID |
+|---------|------|------|
+"@
+        foreach ($pipeline in $InventoryData.Pipelines) {
+            $mdContent += "`n| $($pipeline.Project) | $($pipeline.Name) | $($pipeline.Id) |"
+        }
+    }
+
+    # Release Pipelines
+    if ($InventoryData.ReleasePipelines.Count -gt 0) {
+        $mdContent += @"
+
+## Release Pipelines (Classic)
+
+| Project | Name | Path | Created By | Modified On |
+|---------|------|------|------------|-------------|
+"@
+        foreach ($releasePipeline in $InventoryData.ReleasePipelines) {
+            $path = if ($releasePipeline.Path) { $releasePipeline.Path.Replace("|", "\|") } else { "\\" }
+            $modifiedOn = if ($releasePipeline.ModifiedOn) { 
+                (Get-Date $releasePipeline.ModifiedOn).ToString("yyyy-MM-dd") 
+            } else { "" }
+            
+            $mdContent += "`n| $($releasePipeline.Project) | $($releasePipeline.Name) | $path | $($releasePipeline.CreatedBy) | $modifiedOn |"
+        }
+    }
+
+    # Agents
+    if ($InventoryData.Agents.Count -gt 0) {
+        $mdContent += @"
+
+## Agent Pools and Agents
+
+| Pool Name | Agent Name | Status | Enabled | Version |
+|-----------|------------|--------|---------|---------|
+"@
+        foreach ($agent in $InventoryData.Agents) {
+            $mdContent += "`n| $($agent.PoolName) | $($agent.Name) | $($agent.Status) | $($agent.Enabled) | $($agent.Version) |"
+        }
+    }
+
+    # Service Endpoints
+    if ($InventoryData.ServiceEndpoints.Count -gt 0) {
+        $mdContent += @"
+
+## Service Endpoints (Service Connections)
+
+| Project | Name | Type | Is Shared | Is Ready |
+|---------|------|------|-----------|----------|
+"@
+        foreach ($endpoint in $InventoryData.ServiceEndpoints) {
+            $mdContent += "`n| $($endpoint.Project) | $($endpoint.Name) | $($endpoint.Type) | $($endpoint.IsShared) | $($endpoint.IsReady) |"
+        }
+    }
+
+    # Variable Groups
+    if ($InventoryData.VariableGroups.Count -gt 0) {
+        $mdContent += @"
+
+## Variable Groups
+
+| Project | Name | Description | Variable Count |
+|---------|------|-------------|---------------|
+"@
+        foreach ($varGroup in $InventoryData.VariableGroups) {
+            $description = if ($varGroup.Description) { $varGroup.Description.Replace("|", "\|").Replace("`n", " ") } else { "" }
+            $mdContent += "`n| $($varGroup.Project) | $($varGroup.Name) | $description | $($varGroup.VariableCount) |"
+        }
+    }
+
+    # Teams
+    if ($InventoryData.Teams.Count -gt 0) {
+        $mdContent += @"
+
+## Teams
+
+| Project | Team Name | Member Count | Is Default Team |
+|---------|-----------|--------------|----------------|
+"@
+        foreach ($team in $InventoryData.Teams) {
+            $mdContent += "`n| $($team.Project) | $($team.Name) | $($team.MemberCount) | $($team.IsDefault) |"
+        }
+    }
+
+    # Extensions
+    if ($InventoryData.Extensions.Count -gt 0) {
+        $mdContent += @"
+
+## Installed Extensions
+
+| Name | Publisher | Version | Install State |
+|------|-----------|---------|--------------|
+"@
+        foreach ($extension in $InventoryData.Extensions) {
+            $mdContent += "`n| $($extension.ExtensionName) | $($extension.PublisherName) | $($extension.Version) | $($extension.InstallState) |"
+        }
+    }
+
+    # Pull Requests
+    if ($InventoryData.PullRequests.Count -gt 0) {
+        $mdContent += @"
+
+## Pull Requests
+
+| Project | Repository | ID | Status | Title | Created By | Creation Date |
+|---------|------------|------|--------|-------|-----------|--------------|
+"@
+        # Get top 30 most recent pull requests to keep the report manageable
+        $recentPRs = $InventoryData.PullRequests | Sort-Object -Property CreationDate -Descending | Select-Object -First 30
+        foreach ($pr in $recentPRs) {
+            $title = $pr.Title.Replace("|", "\|").Replace("`n", " ")
+            $creationDate = if ($pr.CreationDate) { 
+                (Get-Date $pr.CreationDate).ToString("yyyy-MM-dd") 
+            } else { "" }
+            
+            $mdContent += "`n| $($pr.Project) | $($pr.Repository) | $($pr.Id) | $($pr.Status) | $title | $($pr.CreatedBy) | $creationDate |"
+        }
+        
+        if ($InventoryData.PullRequests.Count -gt 30) {
+            $mdContent += "`n\n_Note: Showing 30 most recent pull requests out of $($InventoryData.PullRequests.Count) total._"
+        }
+    }
+
+    # Add a note at the end with script info
+    $mdContent += @"
+
+---
+
+*Report generated using Azure DevOps Inventory Script*  
+*Generated on: $timestamp*
+"@
+
+    # Write to file
+    try {
+        $mdContent | Out-File -FilePath $mdPath -Encoding utf8 -Force
+        Write-Host "Inventory exported to $mdPath" -ForegroundColor Green
+    }
+    catch {
+        Write-Warning "Failed to export Markdown report: $_"
+    }
 }
 
 #endregion
@@ -913,6 +1568,39 @@ function Get-AzDoInventory {
     
     # Get artifact feeds
     $feeds = Get-AzDoArtifactFeeds -Organization $orgName -Token $token
+
+    # Get service endpoints
+    $serviceEndpoints = @()
+    if ($projectNames.Count -gt 0) {
+        $serviceEndpoints = Get-AzDoServiceEndpoints -Organization $orgName -Projects $projectNames -Token $token
+    }
+
+    # Get release pipelines
+    $releasePipelines = @()
+    if ($projectNames.Count -gt 0) {
+        $releasePipelines = Get-AzDoReleasePipelines -Organization $orgName -Projects $projectNames -Token $token
+    }
+
+    # Get variable groups
+    $variableGroups = @()
+    if ($projectNames.Count -gt 0) {
+        $variableGroups = Get-AzDoVariableGroups -Organization $orgName -Projects $projectNames -Token $token
+    }
+    
+    # Get teams
+    $teams = @()
+    if ($projectNames.Count -gt 0) {
+        $teams = Get-AzDoTeams -Organization $orgName -Projects $projectNames -Token $token
+    }
+    
+    # Get pull requests
+    $pullRequests = @()
+    if ($projectNames.Count -gt 0) {
+        $pullRequests = Get-AzDoPullRequests -Organization $orgName -Projects $projectNames -Token $token
+    }
+    
+    # Get extensions
+    $extensions = Get-AzDoExtensions -Organization $orgName -Token $token
     
     # Return inventory object
     return [PSCustomObject]@{
@@ -927,6 +1615,12 @@ function Get-AzDoInventory {
         TestPlans = $testPlans
         Dashboards = $dashboards
         ArtifactFeeds = $feeds
+        ServiceEndpoints = $serviceEndpoints
+        ReleasePipelines = $releasePipelines
+        VariableGroups = $variableGroups
+        Teams = $teams
+        PullRequests = $pullRequests
+        Extensions = $extensions
     }
 }
 
@@ -1149,6 +1843,136 @@ function Show-AzDoInventorySummary {
         
         Write-Host "`n  Total Artifact Feeds: $($feeds.Count)" -ForegroundColor Magenta
     }
+
+    # Display service endpoints
+    Write-Host "`nService Endpoints:" -ForegroundColor Green
+    $serviceEndpoints = $InventoryData.ServiceEndpoints
+    
+    if ($serviceEndpoints.Count -eq 0) {
+        Write-Host "  No service endpoints found." -ForegroundColor Gray
+    }
+    else {
+        $serviceEndpointsByProject = $serviceEndpoints | Group-Object -Property Project
+        
+        foreach ($projectGroup in $serviceEndpointsByProject) {
+            Write-Host "  • $($projectGroup.Name) ($($projectGroup.Count) service endpoints)" -ForegroundColor White
+            $projectGroup.Group | ForEach-Object {
+                Write-Host "    - $($_.Name) (Type: $($_.Type))" -ForegroundColor Gray
+            }
+        }
+        
+        Write-Host "`n  Total Service Endpoints: $($serviceEndpoints.Count)" -ForegroundColor Magenta
+    }
+
+    # Display release pipelines
+    Write-Host "`nRelease Pipelines:" -ForegroundColor Green
+    $releasePipelines = $InventoryData.ReleasePipelines
+    
+    if ($releasePipelines.Count -eq 0) {
+        Write-Host "  No release pipelines found." -ForegroundColor Gray
+    }
+    else {
+        $releasePipelinesByProject = $releasePipelines | Group-Object -Property Project
+        
+        foreach ($projectGroup in $releasePipelinesByProject) {
+            Write-Host "  • $($projectGroup.Name) ($($projectGroup.Count) release pipelines)" -ForegroundColor White
+            $projectGroup.Group | ForEach-Object {
+                Write-Host "    - $($_.Name)" -ForegroundColor Gray
+            }
+        }
+        
+        Write-Host "`n  Total Release Pipelines: $($releasePipelines.Count)" -ForegroundColor Magenta
+    }
+
+    # Display variable groups
+    Write-Host "`nVariable Groups:" -ForegroundColor Green
+    $variableGroups = $InventoryData.VariableGroups
+    
+    if ($variableGroups.Count -eq 0) {
+        Write-Host "  No variable groups found." -ForegroundColor Gray
+    }
+    else {
+        $variableGroupsByProject = $variableGroups | Group-Object -Property Project
+        
+        foreach ($projectGroup in $variableGroupsByProject) {
+            Write-Host "  • $($projectGroup.Name) ($($projectGroup.Count) variable groups)" -ForegroundColor White
+            $projectGroup.Group | ForEach-Object {
+                Write-Host "    - $($_.Name)" -ForegroundColor Gray
+            }
+        }
+        
+        Write-Host "`n  Total Variable Groups: $($variableGroups.Count)" -ForegroundColor Magenta
+    }
+
+    # Display teams
+    Write-Host "`nTeams:" -ForegroundColor Green
+    $teams = $InventoryData.Teams
+    
+    if ($teams.Count -eq 0) {
+        Write-Host "  No teams found." -ForegroundColor Gray
+    }
+    else {
+        $teamsByProject = $teams | Group-Object -Property Project
+        
+        foreach ($projectGroup in $teamsByProject) {
+            Write-Host "  • $($projectGroup.Name) ($($projectGroup.Count) teams)" -ForegroundColor White
+            $projectGroup.Group | ForEach-Object {
+                $memberInfo = if ($_.MemberCount -gt 0) { " ($($_.MemberCount) members)" } else { "" }
+                Write-Host "    - $($_.Name)$memberInfo" -ForegroundColor Gray
+            }
+        }
+        
+        Write-Host "`n  Total Teams: $($teams.Count)" -ForegroundColor Magenta
+    }
+    
+    # Display extensions
+    Write-Host "`nInstalled Extensions:" -ForegroundColor Green
+    $extensions = $InventoryData.Extensions
+    
+    if ($extensions.Count -eq 0) {
+        Write-Host "  No extensions found." -ForegroundColor Gray
+    }
+    else {
+        $extensions | ForEach-Object {
+            Write-Host "  • $($_.ExtensionName) (by $($_.PublisherName))" -ForegroundColor White
+            Write-Host "    - Version: $($_.Version)" -ForegroundColor Gray
+        }
+        
+        Write-Host "`n  Total Extensions: $($extensions.Count)" -ForegroundColor Magenta
+    }
+    
+    # Display pull requests
+    Write-Host "`nPull Requests:" -ForegroundColor Green
+    $pullRequests = $InventoryData.PullRequests
+    
+    if ($pullRequests.Count -eq 0) {
+        Write-Host "  No pull requests found." -ForegroundColor Gray
+    }
+    else {
+        # Group by status first, then by project
+        $pullRequestsByStatus = $pullRequests | Group-Object -Property Status
+        
+        foreach ($statusGroup in $pullRequestsByStatus) {
+            Write-Host "  • $($statusGroup.Name) Pull Requests ($($statusGroup.Count))" -ForegroundColor White
+            
+            $pullRequestsByProject = $statusGroup.Group | Group-Object -Property Project
+            foreach ($projectGroup in $pullRequestsByProject) {
+                Write-Host "    - $($projectGroup.Name) ($($projectGroup.Count))" -ForegroundColor Gray
+                
+                # Display the first 5 PRs for each project
+                $projectGroup.Group | Select-Object -First 5 | ForEach-Object {
+                    $repoInfo = if ($_.Repository) { "[$($_.Repository)]" } else { "" }
+                    Write-Host "      » #$($_.Id) $repoInfo $($_.Title)" -ForegroundColor DarkGray
+                }
+                
+                if ($projectGroup.Count -gt 5) {
+                    Write-Host "      » (+ $($projectGroup.Count - 5) more)" -ForegroundColor DarkGray
+                }
+            }
+        }
+        
+        Write-Host "`n  Total Pull Requests: $($pullRequests.Count)" -ForegroundColor Magenta
+    }
     
     Write-Host "`n==========================================================`n" -ForegroundColor Cyan
 }
@@ -1213,6 +2037,12 @@ foreach ($org in $Organizations) {
 if ($ExportFormat -ne "None" -and $allInventoryData.Count -gt 0) {
     # Create timestamp for filename
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    
+    # Check if the export path should be "DevOpsReport" or "DevOpsInventory"
+    if ($ExportPath -eq ".\AzureDevOpsInventory") {
+        $ExportPath = ".\DevOpsInventory"
+    }
+    
     $exportFilePath = "$ExportPath-$timestamp"
     
     Write-Host "`nExporting inventory data..." -ForegroundColor Cyan
@@ -1228,6 +2058,16 @@ if ($ExportFormat -ne "None" -and $allInventoryData.Count -gt 0) {
             foreach ($inventoryData in $allInventoryData) {
                 $orgExportPath = "$exportFilePath-$($inventoryData.Organization)"
                 Export-AzDoInventoryToExcel -InventoryData $inventoryData -ExportPath $orgExportPath
+            }
+        }
+        "Markdown" {
+            foreach ($inventoryData in $allInventoryData) {
+                $orgExportPath = if ($ExportPath -eq ".\DevOpsInventory") {
+                    ".\DevOpsReport-$($inventoryData.Organization)"
+                } else {
+                    "$exportFilePath-$($inventoryData.Organization)"
+                }
+                Export-AzDoInventoryToMarkdown -InventoryData $inventoryData -ExportPath $orgExportPath
             }
         }
     }
